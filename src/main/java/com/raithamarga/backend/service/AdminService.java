@@ -43,6 +43,8 @@ public class AdminService {
         List<Map<String, Object>> listings = repository.list("listings");
         List<Map<String, Object>> requirements = repository.list("requirements");
         List<Map<String, Object>> deals = repository.list("deals");
+        List<Map<String, Object>> users = repository.list("users");
+        List<Map<String, Object>> enrichedDeals = adminDealDetails(deals, farmers, buyers, listings, users);
         Map<String, Long> dealsByStatus = new LinkedHashMap<>();
         for (DealStatus status : DealStatus.values()) {
             dealsByStatus.put(status.name(), deals.stream()
@@ -57,7 +59,17 @@ public class AdminService {
                 "verifiedBuyers", countVerification(buyers, "VERIFIED"),
                 "activeListings", listings.stream().filter(item -> "ACTIVE".equals(item.get("status"))).count(),
                 "activeRequirements", requirements.stream().filter(item -> "ACTIVE".equals(item.get("status"))).count(),
-                "dealsByStatus", dealsByStatus);
+                "dealsByStatus", dealsByStatus,
+                "managedInterestCount", enrichedDeals.stream()
+                        .filter(deal -> Boolean.TRUE.equals(deal.get("managed")))
+                        .filter(deal -> "INTERESTED".equals(deal.get("status")))
+                        .count(),
+                "newInterestRequests", enrichedDeals.stream()
+                        .filter(deal -> Boolean.TRUE.equals(deal.get("managed")))
+                        .filter(deal -> "INTERESTED".equals(deal.get("status")))
+                        .sorted(newestFirst())
+                        .limit(5)
+                        .toList());
     }
 
     public List<Map<String, Object>> verifications(Actor actor, String roleFilter, String statusFilter) {
@@ -219,12 +231,104 @@ public class AdminService {
 
     public List<Map<String, Object>> deals(Actor actor) {
         requireAdmin(actor);
-        return newestCapped(repository.list("deals"), 200);
+        List<Map<String, Object>> deals = repository.list("deals");
+        List<Map<String, Object>> farmers = repository.list("farmers");
+        List<Map<String, Object>> buyers = repository.list("buyers");
+        List<Map<String, Object>> listings = repository.list("listings");
+        List<Map<String, Object>> users = repository.list("users");
+        return newestCapped(adminDealDetails(deals, farmers, buyers, listings, users), 200);
     }
 
     public List<Map<String, Object>> auditLogs(Actor actor) {
         requireAdmin(actor);
-        return newestCapped(repository.list("auditLogs"), 100);
+        List<Map<String, Object>> users = repository.list("users");
+        List<Map<String, Object>> farmers = repository.list("farmers");
+        Map<String, Map<String, Object>> usersById = indexById(users);
+        Map<String, Map<String, Object>> farmersById = indexById(farmers);
+        List<Map<String, Object>> entries = repository.list("auditLogs").stream().map(entry -> {
+            Map<String, Object> enriched = new LinkedHashMap<>(entry);
+            String adminUid = String.valueOf(entry.getOrDefault("adminUid", ""));
+            Map<String, Object> adminUser = usersById.getOrDefault(adminUid, Map.of());
+            String targetUid = String.valueOf(entry.getOrDefault("targetUid", ""));
+            Map<String, Object> targetFarmer = farmersById.getOrDefault(targetUid, Map.of());
+            Object adminName = entry.get("adminName");
+            if (adminName == null) {
+                adminName = adminUser.get("name");
+            }
+            Object targetName = entry.get("targetName");
+            if (targetName == null) {
+                targetName = targetFarmer.get("name");
+            }
+            if (adminName != null) {
+                enriched.put("adminName", adminName);
+            }
+            if (adminUser.get("email") != null) {
+                enriched.put("adminEmail", adminUser.get("email"));
+            }
+            if (targetName != null) {
+                enriched.put("targetName", targetName);
+            }
+            return enriched;
+        }).toList();
+        return newestCapped(entries, 100);
+    }
+
+    private List<Map<String, Object>> adminDealDetails(
+            List<Map<String, Object>> deals, List<Map<String, Object>> farmers,
+            List<Map<String, Object>> buyers, List<Map<String, Object>> listings,
+            List<Map<String, Object>> users) {
+        Map<String, Map<String, Object>> farmersById = indexById(farmers);
+        Map<String, Map<String, Object>> buyersById = indexById(buyers);
+        Map<String, Map<String, Object>> listingsById = indexById(listings);
+        Map<String, Map<String, Object>> usersById = indexById(users);
+        return deals.stream().map(deal -> {
+            Map<String, Object> listing = listingsById.getOrDefault(String.valueOf(deal.get("listingId")), Map.of());
+            Map<String, Object> farmer = farmersById.getOrDefault(String.valueOf(deal.get("farmerId")), Map.of());
+            Map<String, Object> buyer = buyersById.getOrDefault(String.valueOf(deal.get("buyerId")), Map.of());
+            Map<String, Object> buyerUser = usersById.getOrDefault(String.valueOf(deal.get("buyerId")), Map.of());
+            boolean managed = Boolean.TRUE.equals(farmer.get("managed"));
+            Map<String, Object> result = new LinkedHashMap<>(deal);
+            result.put("managed", managed);
+            putIfPresent(result, "farmerName", firstValue(farmer.get("name"), listing.get("farmerName"),
+                    usersById.getOrDefault(String.valueOf(deal.get("farmerId")), Map.of()).get("name")));
+            if (managed) {
+                putIfPresent(result, "farmerPhone", farmer.get("phone"));
+            } else {
+                result.remove("farmerPhone");
+            }
+            putIfPresent(result, "buyerName", firstValue(buyerUser.get("name"), buyer.get("fullName"), buyer.get("name")));
+            putIfPresent(result, "buyerContact", firstValue(buyer.get("phone"), buyer.get("contactPhone"),
+                    buyerUser.get("phone"), buyerUser.get("email"), buyer.get("email")));
+            putIfPresent(result, "crop", listing.get("crop"));
+            putIfPresent(result, "unit", listing.get("unit"));
+            return result;
+        }).toList();
+    }
+
+    private Map<String, Map<String, Object>> indexById(List<Map<String, Object>> records) {
+        Map<String, Map<String, Object>> indexed = new LinkedHashMap<>();
+        for (Map<String, Object> record : records) {
+            Object id = record.getOrDefault("id", record.get("uid"));
+            if (id != null) {
+                indexed.put(String.valueOf(id), record);
+            }
+        }
+        return indexed;
+    }
+
+    private Object firstValue(Object... values) {
+        for (Object value : values) {
+            if (value != null && !String.valueOf(value).isBlank()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private void putIfPresent(Map<String, Object> destination, String key, Object value) {
+        if (value != null) {
+            destination.put(key, value);
+        }
     }
 
     private void requireAdmin(Actor actor) {

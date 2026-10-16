@@ -41,6 +41,8 @@ public class DealService {
 
         DocumentReference listingReference = firestore.collection("listings").document(request.listingId());
         DocumentReference dealReference = firestore.collection("deals").document();
+        DocumentReference auditReference = firestore.collection("auditLogs").document();
+        String buyerName = actorName(actor, "Buyer");
         try {
             return firestore.runTransaction(transaction -> {
                 DocumentSnapshot listingSnapshot = transaction.get(listingReference).get();
@@ -79,8 +81,27 @@ public class DealService {
                 listing.put("updatedAt", now);
                 transaction.set(listingReference, listing);
                 transaction.set(dealReference, deal);
+                if (Boolean.TRUE.equals(listing.get("managed"))) {
+                    String farmerName = String.valueOf(listing.getOrDefault("farmerName", "Team-added farmer"));
+                    transaction.create(auditReference, DataValues.map(
+                            "adminUid", actor.uid(),
+                            "adminName", buyerName,
+                            "action", "MANAGED_DEAL_INTEREST",
+                            "targetId", dealReference.getId(),
+                            "targetUid", farmerId,
+                            "targetName", farmerName,
+                            "targetRole", UserRole.FARMER.name(),
+                            "buyerName", buyerName,
+                            "crop", listing.get("crop"),
+                            "quantity", DataValues.number(request.quantity()),
+                            "unit", listing.get("unit"),
+                            "note", buyerName + " requested " + DataValues.number(request.quantity())
+                                    + " " + listing.get("unit") + " of " + listing.get("crop")
+                                    + " from " + farmerName + ".",
+                            "at", now));
+                }
                 deal.put("id", dealReference.getId());
-                return deal;
+                return safeDeal(deal);
             }).get();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -96,6 +117,7 @@ public class DealService {
     public Map<String, Object> updateStatus(Actor actor, String dealId, DealStatus nextStatus) {
         users.me(actor);
         DocumentReference dealReference = firestore.collection("deals").document(dealId);
+        DocumentReference auditReference = firestore.collection("auditLogs").document();
         try {
             return firestore.runTransaction(transaction -> {
                 DocumentSnapshot dealSnapshot = transaction.get(dealReference).get();
@@ -103,7 +125,8 @@ public class DealService {
                     throw notFound();
                 }
                 Map<String, Object> deal = new LinkedHashMap<>(dealSnapshot.getData());
-                if (!isParty(actor, deal) && !isAdminForManagedFarmer(actor, deal)) {
+                boolean managedAdminAction = !isParty(actor, deal) && isAdminForManagedFarmer(actor, deal);
+                if (!isParty(actor, deal) && !managedAdminAction) {
                     throw forbidden("Only the farmer or buyer in this deal can update it.");
                 }
                 DealStatus current = DealStatus.valueOf(String.valueOf(deal.get("status")));
@@ -140,8 +163,28 @@ public class DealService {
                 deal.put("status", nextStatus.name());
                 deal.put("updatedAt", now);
                 transaction.set(dealReference, deal);
+                if (managedAdminAction) {
+                    String farmerId = String.valueOf(deal.get("farmerId"));
+                    String farmerName = repository.find("farmers", farmerId)
+                            .map(farmer -> String.valueOf(farmer.getOrDefault("name", farmerId)))
+                            .orElse(farmerId);
+                    String adminName = actorName(actor, "Admin");
+                    transaction.create(auditReference, DataValues.map(
+                            "adminUid", actor.uid(),
+                            "adminName", adminName,
+                            "action", "MANAGED_DEAL_STATUS_CHANGED",
+                            "targetId", dealId,
+                            "targetUid", farmerId,
+                            "targetName", farmerName,
+                            "targetRole", UserRole.FARMER.name(),
+                            "fromStatus", current.name(),
+                            "toStatus", nextStatus.name(),
+                            "note", "Deal " + dealId + " status changed from " + current.name()
+                                    + " to " + nextStatus.name() + ".",
+                            "at", now));
+                }
                 deal.put("id", dealId);
-                return deal;
+                return safeDeal(deal);
             }).get();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
@@ -160,6 +203,7 @@ public class DealService {
                 .filter(deal -> isParty(actor, deal))
                 .sorted((left, right) -> String.valueOf(right.get("createdAt"))
                         .compareTo(String.valueOf(left.get("createdAt"))))
+                .map(this::safeDeal)
                 .toList();
     }
 
@@ -170,7 +214,7 @@ public class DealService {
             throw forbidden("Only the farmer or buyer in this deal can view it.");
         }
         deal.put("id", dealId);
-        return deal;
+        return safeDeal(deal);
     }
 
     /**
@@ -189,6 +233,25 @@ public class DealService {
 
     private boolean isParty(Actor actor, Map<String, Object> deal) {
         return actor.uid().equals(deal.get("farmerId")) || actor.uid().equals(deal.get("buyerId"));
+    }
+
+    private Map<String, Object> safeDeal(Map<String, Object> deal) {
+        Map<String, Object> safe = new LinkedHashMap<>(deal);
+        safe.remove("farmerPhone");
+        safe.remove("phone");
+        if (String.valueOf(safe.get("farmerId")).startsWith(ManagedFarmerService.ID_PREFIX)) {
+            safe.remove("farmerId");
+        }
+        return safe;
+    }
+
+    private String actorName(Actor actor, String fallback) {
+        return repository.find("users", actor.uid())
+                .map(user -> user.get("name"))
+                .filter(name -> !String.valueOf(name).isBlank())
+                .map(String::valueOf)
+                .orElseGet(() -> actor.displayName() == null || actor.displayName().isBlank()
+                        ? fallback : actor.displayName());
     }
 
     private ApiException forbidden(String message) {

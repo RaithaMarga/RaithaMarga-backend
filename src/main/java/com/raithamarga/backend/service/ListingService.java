@@ -110,6 +110,12 @@ public class ListingService {
     }
 
     private Map<String, Object> withAvailability(Map<String, Object> listing) {
+        listing.remove("farmerPhone");
+        listing.remove("phone");
+        if (Boolean.TRUE.equals(listing.get("managed"))
+                || String.valueOf(listing.get("farmerId")).startsWith(ManagedFarmerService.ID_PREFIX)) {
+            listing.remove("farmerId");
+        }
         listing.put("availableQuantity", DataValues.number(
                 DataValues.decimal(listing.get("quantity"))
                         .subtract(DataValues.decimal(listing.get("reservedQuantity")))

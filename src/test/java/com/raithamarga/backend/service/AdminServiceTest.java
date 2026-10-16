@@ -16,6 +16,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
 import java.util.Map;
+import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -113,6 +114,36 @@ class AdminServiceTest {
         Map<String, Object> after = (Map<String, Object>) audit.get("after");
         assertEquals("VERIFIED", after.get("verificationStatus"));
         verify(transaction).set(eq(profileReference), any());
+    }
+
+    @Test
+    void adminDealsIncludeManagedFarmerAndBuyerDetails() {
+        when(repository.list("deals")).thenReturn(List.of(Map.of(
+                "id", "deal-1",
+                "farmerId", "managed-9876543210",
+                "buyerId", "buyer-1",
+                "listingId", "listing-1",
+                "quantity", 3D,
+                "price", 20D,
+                "status", "INTERESTED",
+                "createdAt", "2026-10-16T10:00:00Z")));
+        when(repository.list("farmers")).thenReturn(List.of(Map.of(
+                "id", "managed-9876543210", "name", "Farmer Name",
+                "phone", "9876543210", "managed", true)));
+        when(repository.list("buyers")).thenReturn(List.of(Map.of("id", "buyer-1")));
+        when(repository.list("listings")).thenReturn(List.of(Map.of(
+                "id", "listing-1", "crop", "Onion", "unit", "kg", "managed", true)));
+        when(repository.list("users")).thenReturn(List.of(Map.of(
+                "id", "buyer-1", "name", "Buyer Name", "email", "buyer@example.test")));
+
+        Map<String, Object> deal = admin.deals(adminActor).getFirst();
+
+        assertEquals("Farmer Name", deal.get("farmerName"));
+        assertEquals("9876543210", deal.get("farmerPhone"));
+        assertEquals("Buyer Name", deal.get("buyerName"));
+        assertEquals("buyer@example.test", deal.get("buyerContact"));
+        assertEquals("Onion", deal.get("crop"));
+        assertEquals("kg", deal.get("unit"));
     }
 
     private void runTransactionInline() throws Exception {
