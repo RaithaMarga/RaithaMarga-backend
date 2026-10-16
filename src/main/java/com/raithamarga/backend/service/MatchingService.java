@@ -34,8 +34,17 @@ public class MatchingService {
                         ? actor.uid().equals(match.get("farmerId"))
                         : actor.uid().equals(match.get("buyerId")))
                 .sorted(Comparator.comparingInt(match -> -((Number) match.get("score")).intValue()))
+                .map(this::safeMatch)
                 .toList();
         return results;
+    }
+
+    private Map<String, Object> safeMatch(Map<String, Object> match) {
+        Map<String, Object> safe = new java.util.LinkedHashMap<>(match);
+        if (String.valueOf(safe.get("farmerId")).startsWith(ManagedFarmerService.ID_PREFIX)) {
+            safe.remove("farmerId");
+        }
+        return safe;
     }
 
     public List<Map<String, Object>> refresh() {

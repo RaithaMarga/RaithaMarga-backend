@@ -46,6 +46,18 @@ public class ManagedFarmerService {
 
         Optional<Map<String, Object>> existing = repository.find("farmers", id);
         boolean created = existing.isEmpty();
+        String createdBy = existing.map(farmer -> farmer.get("createdBy"))
+                .map(String::valueOf)
+                .filter(value -> !value.isBlank())
+                .orElse(actor.uid());
+        String createdByName = existing.map(farmer -> farmer.get("createdByName"))
+                .filter(name -> !String.valueOf(name).isBlank())
+                .map(String::valueOf)
+                .orElseGet(() -> repository.find("users", createdBy)
+                        .map(user -> user.get("name"))
+                        .filter(name -> !String.valueOf(name).isBlank())
+                        .map(String::valueOf)
+                        .orElseGet(() -> createdBy.equals(actor.uid()) ? adminName(actor) : "team"));
         Map<String, Object> farmer = DataValues.map(
                 "uid", id,
                 "name", request.fullName().trim(),
@@ -61,11 +73,13 @@ public class ManagedFarmerService {
                 "status", "ACTIVE",
                 // The team verified this farmer personally, so they are not queued for verification.
                 "verificationStatus", "VERIFIED",
-                "createdBy", existing.map(f -> f.get("createdBy")).orElse(actor.uid()),
+                "createdBy", createdBy,
+                "createdByName", createdByName,
                 "createdAt", existing.map(f -> f.get("createdAt")).orElse(now),
                 "updatedAt", now);
         repository.set("farmers", id, farmer);
-        audit(actor, created ? "MANAGED_FARMER_CREATED" : "MANAGED_FARMER_UPDATED", id, farmer.get("name").toString(), now);
+        audit(actor, created ? "MANAGED_FARMER_CREATED" : "MANAGED_FARMER_UPDATED",
+                id, String.valueOf(farmer.get("name")), request.notes(), now);
         farmer.put("id", id);
 
         Map<String, Object> listing = null;
@@ -86,7 +100,14 @@ public class ManagedFarmerService {
         return repository.list("farmers").stream()
                 .filter(farmer -> Boolean.TRUE.equals(farmer.get("managed")))
                 .filter(farmer -> !"REMOVED".equals(farmer.get("status")))
-                .peek(farmer -> farmer.put("listingCount", listingCounts.getOrDefault(String.valueOf(farmer.get("id")), 0L)))
+                .peek(farmer -> {
+                    farmer.put("listingCount", listingCounts.getOrDefault(String.valueOf(farmer.get("id")), 0L));
+                    if (farmer.get("createdByName") == null) {
+                        farmer.put("createdByName", repository.find("users", String.valueOf(farmer.get("createdBy")))
+                                .map(user -> user.get("name"))
+                                .orElse("team"));
+                    }
+                })
                 .sorted(Comparator.comparing(
                         (Map<String, Object> farmer) -> String.valueOf(farmer.getOrDefault("createdAt", "")),
                         Comparator.reverseOrder()))
@@ -119,7 +140,8 @@ public class ManagedFarmerService {
         farmer.put("status", "REMOVED");
         farmer.put("updatedAt", now);
         repository.set("farmers", id, farmer);
-        audit(actor, "MANAGED_FARMER_REMOVED", id, String.valueOf(farmer.get("name")), now);
+        audit(actor, "MANAGED_FARMER_REMOVED", id, String.valueOf(farmer.get("name")),
+                "Farmer removed from the marketplace.", now);
         return DataValues.map("id", id, "status", "REMOVED");
     }
 
@@ -148,17 +170,43 @@ public class ManagedFarmerService {
         String listingId = repository.create("listings", listing);
         listing.put("id", listingId);
         listing.put("availableQuantity", DataValues.number(produce.quantity()));
+        audit(actor, "MANAGED_LISTING_CREATED", listingId, String.valueOf(farmer.get("name")),
+                produce.crop().trim() + " · " + produce.quantity().stripTrailingZeros().toPlainString()
+                        + " " + produce.unit().trim() + " · ₹" + produce.price().stripTrailingZeros().toPlainString()
+                        + " per " + produce.unit().trim(), now, farmer.get("id"), listing);
         return listing;
     }
 
-    private void audit(Actor actor, String action, String targetId, String targetName, String now) {
+    private void audit(Actor actor, String action, String targetId, String targetName, String note, String now) {
+        audit(actor, action, targetId, targetName, note, now, targetId, null);
+    }
+
+    private void audit(
+            Actor actor, String action, String targetId, String targetName, String note, String now,
+            Object targetUid, Map<String, Object> produce) {
         repository.create("auditLogs", DataValues.map(
                 "adminUid", actor.uid(),
+                "adminName", adminName(actor),
                 "action", action,
-                "targetUid", targetId,
+                "targetId", targetId,
+                "targetUid", targetUid,
+                "targetName", targetName,
                 "targetRole", UserRole.FARMER.name(),
-                "note", targetName,
+                "crop", produce == null ? null : produce.get("crop"),
+                "quantity", produce == null ? null : produce.get("quantity"),
+                "unit", produce == null ? null : produce.get("unit"),
+                "price", produce == null ? null : produce.get("price"),
+                "note", note == null || note.isBlank() ? targetName : note.trim(),
                 "at", now));
+    }
+
+    private String adminName(Actor actor) {
+        return repository.find("users", actor.uid())
+                .map(user -> user.get("name"))
+                .filter(name -> !String.valueOf(name).isBlank())
+                .map(String::valueOf)
+                .orElseGet(() -> actor.displayName() == null || actor.displayName().isBlank()
+                        ? "team" : actor.displayName());
     }
 
     /** Last 10 digits of the phone number (drops +91 / 0 prefixes, spaces and dashes). */
