@@ -141,13 +141,31 @@ public class AdminService {
         if (statusFilter != null && !statusFilter.isBlank()) {
             requireValue(statusFilter, USER_STATUSES, "user status");
         }
-        return repository.list("users").stream()
+        List<Map<String, Object>> result = new ArrayList<>(repository.list("users").stream()
                 .filter(user -> role == null || role.name().equals(user.get("role")))
                 .filter(user -> statusFilter == null || statusFilter.isBlank()
                         || statusFilter.equals(user.get("status")))
                 .map(this::safeUser)
-                .sorted(newestFirst())
-                .toList();
+                .toList());
+        // Farmers added by the team have no login (no users document), so list them from the farmers collection.
+        boolean wantsActive = statusFilter == null || statusFilter.isBlank() || "ACTIVE".equals(statusFilter);
+        if ((role == null || role == UserRole.FARMER) && wantsActive) {
+            repository.list("farmers").stream()
+                    .filter(farmer -> Boolean.TRUE.equals(farmer.get("managed")))
+                    .filter(farmer -> !"REMOVED".equals(farmer.get("status")))
+                    .map(farmer -> DataValues.map(
+                            "uid", farmer.get("id"),
+                            "role", UserRole.FARMER.name(),
+                            "name", farmer.get("name"),
+                            "phone", farmer.get("phone"),
+                            "managed", true,
+                            "status", "ACTIVE",
+                            "createdAt", farmer.get("createdAt"),
+                            "updatedAt", farmer.get("updatedAt")))
+                    .forEach(result::add);
+        }
+        result.sort(newestFirst());
+        return result;
     }
 
     public Map<String, Object> updateUserStatus(
