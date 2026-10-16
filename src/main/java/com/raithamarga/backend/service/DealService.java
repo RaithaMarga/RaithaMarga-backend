@@ -103,7 +103,7 @@ public class DealService {
                     throw notFound();
                 }
                 Map<String, Object> deal = new LinkedHashMap<>(dealSnapshot.getData());
-                if (!isParty(actor, deal)) {
+                if (!isParty(actor, deal) && !isAdminForManagedFarmer(actor, deal)) {
                     throw forbidden("Only the farmer or buyer in this deal can update it.");
                 }
                 DealStatus current = DealStatus.valueOf(String.valueOf(deal.get("status")));
@@ -171,6 +171,20 @@ public class DealService {
         }
         deal.put("id", dealId);
         return deal;
+    }
+
+    /**
+     * Farmers added by the team have no login, so an admin acts for them on deals
+     * (confirm, in progress, complete, cancel).
+     */
+    private boolean isAdminForManagedFarmer(Actor actor, Map<String, Object> deal) {
+        boolean admin = repository.find("users", actor.uid())
+                .map(user -> "ADMIN".equals(String.valueOf(user.get("role")))
+                        && !"DISABLED".equals(String.valueOf(user.get("status"))))
+                .orElse(false);
+        return admin && repository.find("farmers", String.valueOf(deal.get("farmerId")))
+                .map(farmer -> Boolean.TRUE.equals(farmer.get("managed")))
+                .orElse(false);
     }
 
     private boolean isParty(Actor actor, Map<String, Object> deal) {

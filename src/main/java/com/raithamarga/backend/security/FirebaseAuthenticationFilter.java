@@ -31,6 +31,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
     protected boolean shouldNotFilter(HttpServletRequest request) {
         return (HttpMethod.OPTIONS.matches(request.getMethod())
                 || (HttpMethod.GET.matches(request.getMethod()) && "/api/health".equals(request.getRequestURI()))
+                || (HttpMethod.GET.matches(request.getMethod()) && "/api/public/availability".equals(request.getRequestURI()))
                 || (HttpMethod.POST.matches(request.getMethod()) && "/api/contact".equals(request.getRequestURI())));
     }
 
