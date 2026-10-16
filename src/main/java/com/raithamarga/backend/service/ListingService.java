@@ -69,6 +69,37 @@ public class ListingService {
                 .toList();
     }
 
+    /** Aggregated availability per crop and unit: no farmer names, phone numbers or locations. */
+    public List<Map<String, Object>> publicAvailability() {
+        Map<String, Map<String, Object>> byCropUnit = new java.util.LinkedHashMap<>();
+        for (Map<String, Object> listing : repository.list("listings")) {
+            if (!"ACTIVE".equals(listing.get("status"))) {
+                continue;
+            }
+            java.math.BigDecimal available = DataValues.decimal(withAvailability(listing).get("availableQuantity"));
+            if (available.signum() <= 0) {
+                continue;
+            }
+            String crop = String.valueOf(listing.get("crop")).trim();
+            String unit = String.valueOf(listing.get("unit")).trim();
+            String key = DataValues.normalize(crop) + "|" + DataValues.normalize(unit);
+            java.math.BigDecimal price = DataValues.decimal(listing.get("price"));
+            Map<String, Object> entry = byCropUnit.computeIfAbsent(key, ignored -> DataValues.map(
+                    "crop", crop,
+                    "unit", unit,
+                    "availableQuantity", 0D,
+                    "minPrice", DataValues.number(price),
+                    "listingCount", 0));
+            entry.put("availableQuantity", DataValues.number(
+                    DataValues.decimal(entry.get("availableQuantity")).add(available)));
+            if (price.signum() > 0 && price.compareTo(DataValues.decimal(entry.get("minPrice"))) < 0) {
+                entry.put("minPrice", DataValues.number(price));
+            }
+            entry.put("listingCount", ((Integer) entry.get("listingCount")) + 1);
+        }
+        return List.copyOf(byCropUnit.values());
+    }
+
     public Map<String, Object> get(Actor actor, String id) {
         users.me(actor);
         return repository.find("listings", id)

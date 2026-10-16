@@ -1,6 +1,7 @@
 package com.raithamarga.backend.dto;
 
 import com.raithamarga.backend.model.DealStatus;
+import jakarta.validation.Valid;
 import jakarta.validation.constraints.FutureOrPresent;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -43,6 +44,32 @@ public final class ApiDtos {
             @Size(max = 100) String village,
             @Size(max = 100) String state,
             @NotNull @FutureOrPresent LocalDate availabilityDate) {
+    }
+
+    /** Produce the team lists on behalf of a farmer. The availability date is optional (defaults to today). */
+    public record AdminProduceRequest(
+            @NotBlank @Size(max = 100) String crop,
+            @NotNull @Positive BigDecimal quantity,
+            @NotBlank @Size(max = 30) String unit,
+            @Size(max = 40) String grade,
+            @NotNull @Positive BigDecimal price,
+            LocalDate availabilityDate) {
+    }
+
+    /**
+     * A farmer added by the RaithaMarga team (for example from a WhatsApp message).
+     * Only a name and phone number are required: no email and no Firebase login.
+     */
+    public record AdminFarmerRequest(
+            @NotBlank @Size(max = 100) String fullName,
+            @NotBlank @Pattern(regexp = "^\\+?[0-9 ()-]{10,20}$", message = "must be a valid phone number")
+            String phone,
+            @Size(max = 100) String village,
+            @Size(max = 100) String taluk,
+            @NotBlank @Size(max = 100) String district,
+            @Size(max = 100) String state,
+            @Size(max = 500) String notes,
+            @Valid AdminProduceRequest produce) {
     }
 
     public record RequirementRequest(

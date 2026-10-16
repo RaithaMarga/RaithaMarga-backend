@@ -90,6 +90,10 @@ All request and response bodies are JSON. Except where marked **public**, send `
 | `GET` | `/api/admin/listings` | Admin | Read the latest 200 listings |
 | `GET` | `/api/admin/deals` | Admin | Read the latest 200 deals |
 | `GET` | `/api/admin/audit-logs` | Admin | Read the latest 100 account and verification changes |
+| `POST` | `/api/admin/farmers` | Admin | Add a farmer on behalf of the team (name + phone, no email/login) and optionally list their first produce. Same phone number updates the existing farmer |
+| `GET` | `/api/admin/farmers` | Admin | List team-added farmers with active listing counts |
+| `POST` | `/api/admin/farmers/{id}/remove` | Admin | Soft-remove a team-added farmer and take their listings off the marketplace (blocked while they have open deals) |
+| `GET` | `/api/public/availability` | Public | Total available quantity and lowest price per crop/unit, for the home page. No farmer details |
 
 Example profile and listing bodies:
 
@@ -124,6 +128,10 @@ POST /api/listings
 Buyer profile fields are `fullName`, `businessName`, and `district`. Requirement fields are `crop`, `quantity`, `unit`, optional `quality`, `location` (the buyer's district), and `targetPrice`. Deal creation takes `listingId`, `quantity`, and optional `price` (defaults to the listing price). Deal status updates take `{"status":"CONFIRMED"}` (or another valid next status).
 
 Matching requires the same normalized crop, unit, district, sufficient remaining quantity, listing price no more than 10% above the buyer's target, and a grade that meets the requested quality. Scores are deterministic and reflect quantity surplus, price, and grade. Recognized grade rankings are A/premium/1, B/standard/2, and C/basic/3; unrecognized grades must match exactly. Matching does not combine multiple farmers' lots.
+
+### Team-added farmers (WhatsApp)
+
+Farmers who contact the team on WhatsApp do not need an email or a Firebase account. `POST /api/admin/farmers` creates `farmers/managed-<10-digit phone>` (so the phone number is unique) with `managed: true`, `verificationStatus: VERIFIED` and no `users` document. Their listings carry `farmerId` = that id plus `managed: true` and `farmerName`; phone numbers are never included in listing responses. Since these farmers cannot log in, an admin may move their deals through the normal status flow via `PATCH /api/deals/{id}/status`.
 
 ### Admin account provisioning and verification
 
