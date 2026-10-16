@@ -29,6 +29,9 @@ public class ListingService {
                         "Complete your farmer profile before creating a listing."));
         Map<String, Object> listing = DataValues.map(
                 "farmerId", actor.uid(),
+                "farmerName", repository.find("users", actor.uid())
+                        .map(user -> user.get("name"))
+                        .orElse(null),
                 "crop", request.crop().trim(),
                 "quantity", DataValues.number(request.quantity()),
                 "reservedQuantity", 0D,
