@@ -3,6 +3,8 @@ package com.raithamarga.backend.service;
 import com.google.cloud.firestore.DocumentReference;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
+import com.raithamarga.backend.dto.ApiDtos.CheckoutLineRequest;
+import com.raithamarga.backend.dto.ApiDtos.CheckoutRequest;
 import com.raithamarga.backend.dto.ApiDtos.DealCreateRequest;
 import com.raithamarga.backend.exception.ApiException;
 import com.raithamarga.backend.model.DealStatus;
@@ -14,8 +16,11 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.util.LinkedHashMap;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ExecutionException;
 
 @Service
@@ -103,6 +108,156 @@ public class DealService {
                 deal.put("id", dealReference.getId());
                 return safeDeal(deal);
             }).get();
+        } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            throw databaseUnavailable();
+        } catch (ExecutionException exception) {
+            if (exception.getCause() instanceof ApiException apiException) {
+                throw apiException;
+            }
+            throw databaseUnavailable();
+        }
+    }
+
+    public List<Map<String, Object>> checkout(Actor actor, CheckoutRequest request) {
+        users.requireRole(actor, UserRole.BUYER);
+        Map<String, Object> buyer = repository.find("buyers", actor.uid())
+                .orElseThrow(() -> forbidden("Complete your buyer profile before checkout."));
+        if (!"VERIFIED".equals(buyer.get("verificationStatus"))) {
+            throw forbidden("Only manually verified buyers can check out.");
+        }
+
+        Set<String> listingIds = new HashSet<>();
+        for (CheckoutLineRequest item : request.items()) {
+            if (!listingIds.add(item.listingId())) {
+                throw new ApiException(HttpStatus.BAD_REQUEST, "duplicate_listing",
+                        "A listing can appear only once in a checkout.");
+            }
+        }
+
+        String lineSignature = request.items().stream()
+                .map(item -> item.listingId() + ":" + item.quantity().stripTrailingZeros().toPlainString()
+                        + ":" + item.expectedPrice().stripTrailingZeros().toPlainString())
+                .reduce((left, right) -> left + "|" + right)
+                .orElseThrow();
+        String now = DataValues.now();
+        String buyerName = actorName(actor, "Buyer");
+        DocumentReference receiptReference = firestore.collection("checkoutRequests")
+                .document(actor.uid() + "_" + request.idempotencyKey());
+        List<DocumentReference> listingReferences = request.items().stream()
+                .map(item -> firestore.collection("listings").document(item.listingId())).toList();
+        List<DocumentReference> dealReferences = request.items().stream()
+                .map(item -> firestore.collection("deals").document()).toList();
+        List<DocumentReference> auditReferences = request.items().stream()
+                .map(item -> firestore.collection("auditLogs").document()).toList();
+
+        try {
+            CheckoutOutcome outcome = firestore.runTransaction(transaction -> {
+                DocumentSnapshot receipt = transaction.get(receiptReference).get();
+                if (receipt.exists()) {
+                    if (!lineSignature.equals(receipt.getString("lineSignature"))) {
+                        throw conflict("This checkout key was already used for different cart contents.");
+                    }
+                    @SuppressWarnings("unchecked")
+                    List<String> previousDealIds = (List<String>) receipt.get("dealIds");
+                    return new CheckoutOutcome(previousDealIds, true);
+                }
+
+                List<Map<String, Object>> listings = new ArrayList<>();
+                for (int index = 0; index < listingReferences.size(); index++) {
+                    DocumentSnapshot snapshot = transaction.get(listingReferences.get(index)).get();
+                    if (!snapshot.exists()) {
+                        throw new ApiException(HttpStatus.NOT_FOUND, "listing_not_found",
+                                "A listing in this cart was not found.");
+                    }
+                    Map<String, Object> listing = new LinkedHashMap<>(snapshot.getData());
+                    if (!"ACTIVE".equals(listing.get("status"))) {
+                        throw conflict("A listing in this cart is no longer available.");
+                    }
+                    BigDecimal currentPrice = DataValues.decimal(listing.get("price"));
+                    if (currentPrice.compareTo(request.items().get(index).expectedPrice()) != 0) {
+                        throw conflict("The price of " + listing.get("crop")
+                                + " has changed. Refresh the cart and review the current price.");
+                    }
+                    BigDecimal available = DataValues.decimal(listing.get("quantity"))
+                            .subtract(DataValues.decimal(listing.get("reservedQuantity")))
+                            .subtract(DataValues.decimal(listing.get("soldQuantity")));
+                    if (request.items().get(index).quantity().compareTo(available) > 0) {
+                        throw conflict("Requested quantity for " + listing.get("crop")
+                                + " exceeds the available quantity.");
+                    }
+                    listings.add(listing);
+                }
+
+                List<String> dealIds = new ArrayList<>();
+                List<Map<String, Object>> createdDeals = new ArrayList<>();
+                for (int index = 0; index < listings.size(); index++) {
+                    CheckoutLineRequest item = request.items().get(index);
+                    Map<String, Object> listing = listings.get(index);
+                    BigDecimal quantity = item.quantity();
+                    BigDecimal reserved = DataValues.decimal(listing.get("reservedQuantity"));
+                    listing.put("reservedQuantity", DataValues.number(reserved.add(quantity)));
+                    listing.put("updatedAt", now);
+                    transaction.set(listingReferences.get(index), listing);
+
+                    String farmerId = String.valueOf(listing.get("farmerId"));
+                    String farmerName = String.valueOf(listing.getOrDefault("farmerName", "Farmer"));
+                    Map<String, Object> deal = DataValues.map(
+                            "farmerId", farmerId,
+                            "buyerId", actor.uid(),
+                            "listingId", item.listingId(),
+                            "crop", listing.get("crop"),
+                            "unit", listing.get("unit"),
+                            "farmerName", farmerName,
+                            "buyerName", buyerName,
+                            "quantity", DataValues.number(quantity),
+                            "price", DataValues.number(item.expectedPrice()),
+                            "paymentStatus", "PENDING",
+                            "status", DealStatus.INTERESTED.name(),
+                            "createdAt", now,
+                            "updatedAt", now);
+                    transaction.create(dealReferences.get(index), deal);
+                    deal.put("id", dealReferences.get(index).getId());
+                    dealIds.add(dealReferences.get(index).getId());
+                    createdDeals.add(safeDeal(deal));
+
+                    if (Boolean.TRUE.equals(listing.get("managed"))) {
+                        String managedFarmerName = farmerName;
+                        transaction.create(auditReferences.get(index), DataValues.map(
+                                "adminUid", actor.uid(),
+                                "adminName", buyerName,
+                                "action", "MANAGED_DEAL_INTEREST",
+                                "targetId", dealReferences.get(index).getId(),
+                                "targetUid", farmerId,
+                                "targetName", managedFarmerName,
+                                "targetRole", UserRole.FARMER.name(),
+                                "buyerName", buyerName,
+                                "crop", listing.get("crop"),
+                                "quantity", DataValues.number(quantity),
+                                "unit", listing.get("unit"),
+                                "note", buyerName + " requested " + DataValues.number(quantity) + " "
+                                        + listing.get("unit") + " of " + listing.get("crop")
+                                        + " from " + managedFarmerName + ".",
+                                "at", now));
+                    }
+                }
+                transaction.create(receiptReference, DataValues.map(
+                        "buyerId", actor.uid(),
+                        "lineSignature", lineSignature,
+                        "dealIds", dealIds,
+                        "createdAt", now));
+                return new CheckoutOutcome(dealIds, false, createdDeals);
+            }).get();
+
+            if (!outcome.alreadyProcessed()) {
+                return outcome.deals();
+            }
+            return outcome.dealIds().stream()
+                    .map(id -> repository.find("deals", id).map(deal -> {
+                        deal.put("id", id);
+                        return safeDeal(deal);
+                    }).orElseThrow(this::notFound))
+                    .toList();
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw databaseUnavailable();
@@ -269,5 +424,11 @@ public class DealService {
     private ApiException databaseUnavailable() {
         return new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "database_unavailable",
                 "The data service is temporarily unavailable.");
+    }
+
+    private record CheckoutOutcome(List<String> dealIds, boolean alreadyProcessed, List<Map<String, Object>> deals) {
+        private CheckoutOutcome(List<String> dealIds, boolean alreadyProcessed) {
+            this(dealIds, alreadyProcessed, List.of());
+        }
     }
 }

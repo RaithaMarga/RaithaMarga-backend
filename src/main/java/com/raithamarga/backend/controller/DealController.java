@@ -2,6 +2,7 @@ package com.raithamarga.backend.controller;
 
 import com.raithamarga.backend.dto.ApiDtos.DealCreateRequest;
 import com.raithamarga.backend.dto.ApiDtos.DealStatusRequest;
+import com.raithamarga.backend.dto.ApiDtos.CheckoutRequest;
 import com.raithamarga.backend.security.Actor;
 import com.raithamarga.backend.security.FirebaseAuthenticationFilter;
 import com.raithamarga.backend.service.DealService;
@@ -36,6 +37,14 @@ public class DealController {
             @RequestAttribute(FirebaseAuthenticationFilter.ACTOR_ATTRIBUTE) Actor actor,
             @Valid @RequestBody DealCreateRequest request) {
         return deals.create(actor, request);
+    }
+
+    @PostMapping("/checkout")
+    @ResponseStatus(HttpStatus.CREATED)
+    public List<Map<String, Object>> checkout(
+            @RequestAttribute(FirebaseAuthenticationFilter.ACTOR_ATTRIBUTE) Actor actor,
+            @Valid @RequestBody CheckoutRequest request) {
+        return deals.checkout(actor, request);
     }
 
     @GetMapping
