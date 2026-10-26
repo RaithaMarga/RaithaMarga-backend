@@ -72,13 +72,19 @@ public class DealService {
 
                 BigDecimal unitPrice = request.price() == null
                         ? DataValues.decimal(listing.get("price")) : request.price();
+                String farmerName = String.valueOf(listing.getOrDefault("farmerName", "Farmer"));
                 String now = DataValues.now();
                 Map<String, Object> deal = DataValues.map(
                         "farmerId", farmerId,
                         "buyerId", actor.uid(),
                         "listingId", request.listingId(),
+                        "crop", listing.get("crop"),
+                        "unit", listing.get("unit"),
+                        "farmerName", farmerName,
+                        "buyerName", buyerName,
                         "quantity", DataValues.number(request.quantity()),
                         "price", DataValues.number(unitPrice),
+                        "paymentStatus", "PENDING",
                         "status", DealStatus.INTERESTED.name(),
                         "createdAt", now,
                         "updatedAt", now);
