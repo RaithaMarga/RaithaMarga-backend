@@ -93,14 +93,14 @@ public class DealService {
                 transaction.set(listingReference, listing);
                 transaction.set(dealReference, deal);
                 if (Boolean.TRUE.equals(listing.get("managed"))) {
-                    String farmerName = String.valueOf(listing.getOrDefault("farmerName", "Team-added farmer"));
+                    String managedFarmerName = String.valueOf(listing.getOrDefault("farmerName", "Team-added farmer"));
                     transaction.create(auditReference, DataValues.map(
                             "adminUid", actor.uid(),
                             "adminName", buyerName,
                             "action", "MANAGED_DEAL_INTEREST",
                             "targetId", dealReference.getId(),
                             "targetUid", farmerId,
-                            "targetName", farmerName,
+                            "targetName", managedFarmerName,
                             "targetRole", UserRole.FARMER.name(),
                             "buyerName", buyerName,
                             "crop", listing.get("crop"),
@@ -108,7 +108,7 @@ public class DealService {
                             "unit", listing.get("unit"),
                             "note", buyerName + " requested " + DataValues.number(request.quantity())
                                     + " " + listing.get("unit") + " of " + listing.get("crop")
-                                    + " from " + farmerName + ".",
+                                    + " from " + managedFarmerName + ".",
                             "at", now));
                 }
                 deal.put("id", dealReference.getId());
