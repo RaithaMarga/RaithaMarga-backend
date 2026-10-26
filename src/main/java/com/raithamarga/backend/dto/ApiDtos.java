@@ -3,6 +3,7 @@ package com.raithamarga.backend.dto;
 import com.raithamarga.backend.model.DealStatus;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.FutureOrPresent;
+import jakarta.validation.constraints.DecimalMin;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
@@ -12,6 +13,7 @@ import jakarta.validation.constraints.Size;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 
 public final class ApiDtos {
 
@@ -85,6 +87,28 @@ public final class ApiDtos {
             @NotBlank @Pattern(regexp = "^[A-Za-z0-9_-]{1,128}$") String listingId,
             @NotNull @Positive BigDecimal quantity,
             @Positive BigDecimal price) {
+    }
+
+    public record CheckoutLineRequest(
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9_-]{1,128}$") String listingId,
+            @NotNull @Positive BigDecimal quantity,
+            @NotNull @Positive BigDecimal expectedPrice) {
+    }
+
+    public record CheckoutRequest(
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9_-]{8,100}$") String idempotencyKey,
+            @NotNull @Size(min = 1, max = 100) List<@Valid CheckoutLineRequest> items) {
+    }
+
+    public record BidCreateRequest(
+            @NotBlank @Pattern(regexp = "^[A-Za-z0-9_-]{1,128}$") String listingId,
+            @NotNull @Positive BigDecimal quantity,
+            @NotNull @Positive BigDecimal offerPrice) {
+    }
+
+    public record BidActionRequest(
+            @NotBlank @Pattern(regexp = "ACCEPT|REJECT|COUNTER|ACCEPT_COUNTER|REJECT_COUNTER") String action,
+            @DecimalMin(value = "0.01") BigDecimal counterPrice) {
     }
 
     public record DealStatusRequest(@NotNull DealStatus status) {
